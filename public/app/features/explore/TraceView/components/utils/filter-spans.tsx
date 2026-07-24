@@ -320,23 +320,27 @@ const getTagMatches = (spans: TraceSpan[], tags: TraceSearchTag[]) => {
 };
 
 const checkKeyValConditionForRegex = (tag: TraceSearchTag, span: TraceSpan) => {
+  if (!tag.value) {
+    return false;
+  }
+
   return (
     span.tags.some((kv) => checkKeyAndValueForRegex(tag, kv)) ||
     span.process.tags.some((kv) => checkKeyAndValueForRegex(tag, kv)) ||
     (span.logs && span.logs.some((log) => log.fields.some((kv) => checkKeyAndValueForRegex(tag, kv)))) ||
-    (span.kind && tag.key === KIND && span.kind.includes(tag.value || '')) ||
+    (span.kind && tag.key === KIND && span.kind.includes(tag.value)) ||
     (span.statusCode !== undefined &&
       tag.key === STATUS &&
-      SpanStatusCode[span.statusCode].toLowerCase().includes(tag.value || '')) ||
-    (span.statusMessage && tag.key === STATUS_MESSAGE && span.statusMessage.includes(tag.value || '')) ||
+      SpanStatusCode[span.statusCode].toLowerCase().includes(tag.value)) ||
+    (span.statusMessage && tag.key === STATUS_MESSAGE && span.statusMessage.includes(tag.value)) ||
     (span.instrumentationLibraryName &&
       tag.key === LIBRARY_NAME &&
-      span.instrumentationLibraryName.includes(tag.value || '')) ||
+      span.instrumentationLibraryName.includes(tag.value)) ||
     (span.instrumentationLibraryVersion &&
       tag.key === LIBRARY_VERSION &&
-      span.instrumentationLibraryVersion.includes(tag.value || '')) ||
-    (span.traceState && tag.key === TRACE_STATE && span.traceState.includes(tag.value || '')) ||
-    (tag.key === ID && span.spanID.includes(tag.value || ''))
+      span.instrumentationLibraryVersion.includes(tag.value)) ||
+    (span.traceState && tag.key === TRACE_STATE && span.traceState.includes(tag.value)) ||
+    (tag.key === ID && span.spanID.includes(tag.value))
   );
 };
 
