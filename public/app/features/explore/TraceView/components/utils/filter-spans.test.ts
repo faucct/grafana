@@ -394,6 +394,15 @@ describe('filterSpans', () => {
         spans
       )
     ).toEqual(new Set([]));
+    expect(
+      filterSpans(
+        {
+          ...DEFAULT_SPAN_FILTERS,
+          tags: [{ ...DEFAULT_TAG_FILTERS, key: 'kind', operator: '=~', value: 'prefix-kind0-suffix' }],
+        },
+        spans
+      )
+    ).toEqual(new Set([]));
   });
 
   it("should not return spans whose tags' kv.key match a filter but kv.value/operator does not match", () => {
