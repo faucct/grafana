@@ -59,6 +59,9 @@ func checkManagerPropertiesOnDelete(auth authtypes.AuthInfo, obj utils.GrafanaMe
 }
 
 func checkManagerPropertiesOnCreate(auth authtypes.AuthInfo, obj utils.GrafanaMetaAccessor) error {
+	if err := enforceClassicFPAssignment(auth, obj); err != nil {
+		return err
+	}
 	return enforceManagerProperties(auth, obj)
 }
 
@@ -95,12 +98,7 @@ func checkManagerPropertiesOnUpdateSpec(auth authtypes.AuthInfo, obj utils.Grafa
 	// Changing the manager kind is not allowed.
 	// Remove the old manager first, then add a new one with a different kind.
 	if hasOld && managerNew.Kind != managerOld.Kind {
-		return &apierrors.StatusError{ErrStatus: metav1.Status{
-			Status:  metav1.StatusFailure,
-			Code:    http.StatusForbidden,
-			Reason:  metav1.StatusReasonForbidden,
-			Message: "Cannot change resource manager kind; remove the existing manager first, then add the new one",
-		}}
+		return utils.NewForbiddenManagerKindChangeError(managerOld, managerNew)
 	}
 
 	// For non-Terraform managers, identity changes are also blocked.
@@ -149,7 +147,13 @@ func checkManagerPropertiesOnUpdateSpec(auth authtypes.AuthInfo, obj utils.Grafa
 		}
 	}
 
-	// Adding a manager or updating flags on the same owner.
+	// Adding a manager or updating flags on the same owner. Gate only a *new* classic-FP
+	// assignment: rewriting one that already carries it must keep working (allowUiUpdates).
+	if !hasOld || managerOld.Kind != utils.ManagerKindClassicFP { // nolint:staticcheck
+		if err := enforceClassicFPAssignment(auth, obj); err != nil {
+			return err
+		}
+	}
 	return enforceManagerProperties(auth, obj)
 }
 
@@ -183,6 +187,24 @@ func ensureSameRepoManager(folder utils.GrafanaMetaAccessor, resource utils.Graf
 	return nil
 }
 
+// enforceClassicFPAssignment blocks assigning classic-file-provisioning provenance. The
+// manager annotations are server-derived and only the file provisioner may set them.
+func enforceClassicFPAssignment(auth authtypes.AuthInfo, obj utils.GrafanaMetaAccessor) error {
+	kind := utils.ParseManagerKindString(obj.GetAnnotation(utils.AnnoKeyManagerKind))
+	if kind != utils.ManagerKindClassicFP { // nolint:staticcheck
+		return nil
+	}
+	if identity.IsServiceIdentityAuth(auth) {
+		return nil // the file provisioner
+	}
+	return &apierrors.StatusError{ErrStatus: metav1.Status{
+		Status:  metav1.StatusFailure,
+		Code:    http.StatusForbidden,
+		Reason:  metav1.StatusReasonForbidden,
+		Message: "Can not set the classic-file-provisioning resource manager",
+	}}
+}
+
 func enforceManagerProperties(auth authtypes.AuthInfo, obj utils.GrafanaMetaAccessor) error {
 	kind := obj.GetAnnotation(utils.AnnoKeyManagerKind)
 	if kind == "" {
@@ -200,7 +222,8 @@ func enforceManagerProperties(auth authtypes.AuthInfo, obj utils.GrafanaMetaAcce
 		// This can fallback to writing the value with a provisioning client
 		return errResourceIsManagedInRepository
 
-	case utils.ManagerKindPlugin,
+	case utils.ManagerKindFileProvisioning,
+		utils.ManagerKindPlugin,
 		utils.ManagerKindClassicFP,                  // nolint:staticcheck
 		utils.ManagerKindClassicAPI,                 // nolint:staticcheck
 		utils.ManagerKindClassicConvertedPrometheus: // nolint:staticcheck
@@ -241,37 +264,41 @@ func managedResourceCommitMessage(obj utils.GrafanaMetaAccessor, action resource
 	}
 }
 
+// handleManagedResourceRouting re-routes a write for a repo-managed resource to the provisioning
+// files endpoint. cleanupSafe reports whether the write definitely did not persist (so a caller may
+// safely delete secrets it created for it): true only when the provisioning request was never sent,
+// false once it is sent because the endpoint may have committed the file even when it returns an error.
 func (s *Storage) handleManagedResourceRouting(ctx context.Context,
 	err error,
 	action resourcepb.WatchEvent_Type,
 	key string,
 	orig runtime.Object,
 	rsp runtime.Object,
-) error {
+) (cleanupSafe bool, _ error) {
 	if !errors.Is(err, errResourceIsManagedInRepository) || s.configProvider == nil {
-		return err
+		return true, err // not routed: the write was never attempted
 	}
 	obj, err := utils.MetaAccessor(orig)
 	if err != nil {
-		return err
+		return true, err
 	}
 	repo, ok := obj.GetManagerProperties()
 	if !ok {
-		return fmt.Errorf("expected managed resource")
+		return true, fmt.Errorf("expected managed resource")
 	}
 	if repo.Kind != utils.ManagerKindRepo {
 		if !repo.AllowsEdits {
-			return fmt.Errorf("managed resource does not allow edits")
+			return true, fmt.Errorf("managed resource does not allow edits")
 		}
 	}
 	src, ok := obj.GetSourceProperties()
 	if !ok || src.Path == "" {
-		return fmt.Errorf("managed resource is missing source path annotation")
+		return true, fmt.Errorf("managed resource is missing source path annotation")
 	}
 
 	cfg, err := s.configProvider.GetRestConfig(ctx)
 	if err != nil {
-		return err
+		return true, err
 	}
 	cfg.NegotiatedSerializer = serializer.WithoutConversionCodecFactory{CodecFactory: scheme.Codecs}
 	cfg.GroupVersion = &schema.GroupVersion{
@@ -280,13 +307,13 @@ func (s *Storage) handleManagedResourceRouting(ctx context.Context,
 	}
 	client, err := rest.RESTClientFor(cfg)
 	if err != nil {
-		return err
+		return true, err
 	}
 
 	if action == resourcepb.WatchEvent_DELETED {
 		// TODO? can we copy orig into rsp without a full get?
 		if err = s.Get(ctx, key, storage.GetOptions{}, rsp); err != nil { // COPY?
-			return err
+			return true, err
 		}
 		result := client.Delete().
 			Namespace(obj.GetNamespace()).
@@ -295,7 +322,7 @@ func (s *Storage) handleManagedResourceRouting(ctx context.Context,
 			Suffix("files", src.Path).
 			Param("message", managedResourceCommitMessage(obj, action)).
 			Do(ctx)
-		return result.Error()
+		return false, result.Error()
 	}
 
 	var req *rest.Request
@@ -305,7 +332,7 @@ func (s *Storage) handleManagedResourceRouting(ctx context.Context,
 	case resourcepb.WatchEvent_MODIFIED:
 		req = client.Put()
 	default:
-		return fmt.Errorf("unsupported provisioning action: %v, %w", action, err)
+		return true, fmt.Errorf("unsupported provisioning action: %v, %w", action, err)
 	}
 
 	// Execute the change. The provisioning files endpoint reads the commit
@@ -321,11 +348,13 @@ func (s *Storage) handleManagedResourceRouting(ctx context.Context,
 		Param("skipDryRun", "true").
 		Param("message", managedResourceCommitMessage(obj, action)).
 		Do(ctx)
-	err = result.Error()
-	if err != nil {
-		return err
+	if err = result.Error(); err != nil {
+		// The files endpoint may commit the repository file before returning an error
+		// (e.g. a 409 after the write), so any post-send failure is ambiguous: keep the
+		// secret rather than orphan a committed reference.
+		return false, err
 	}
 
-	// return the updated value
-	return s.Get(ctx, key, storage.GetOptions{}, rsp)
+	// The write persisted; keep any secrets even if the read-back fails.
+	return false, s.Get(ctx, key, storage.GetOptions{}, rsp)
 }

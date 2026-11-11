@@ -1,5 +1,5 @@
 import { css, cx } from '@emotion/css';
-import { type CSSProperties, type ReactElement, type ReactNode, useId, useState } from 'react';
+import { type CSSProperties, type ReactElement, type ReactNode, useEffect, useId, useState } from 'react';
 import * as React from 'react';
 import { useMeasure, useToggle } from 'react-use';
 
@@ -8,7 +8,7 @@ import { selectors } from '@grafana/e2e-selectors';
 import { t } from '@grafana/i18n';
 
 import { useStyles2, useTheme2 } from '../../themes/ThemeContext';
-import { getFocusStyles } from '../../themes/mixins';
+import { getFocusStyles, getInternalRadius } from '../../themes/mixins';
 import { DelayRender } from '../../utils/DelayRender';
 import { usePointerDistance } from '../../utils/usePointerDistance';
 import { useElementSelection } from '../ElementSelectionContext/ElementSelectionContext';
@@ -18,11 +18,13 @@ import { Text } from '../Text/Text';
 import { Tooltip } from '../Tooltip/Tooltip';
 
 import { HoverWidget } from './HoverWidget';
+import { usePanelContext } from './PanelContext';
 import { PanelDescription } from './PanelDescription';
 import { PanelMenu } from './PanelMenu';
 import { PanelStatus } from './PanelStatus';
 import { TitleItem } from './TitleItem';
 import { type PanelStatusItem } from './types';
+import { usePanelStatusSnapshot } from './usePanelNotices';
 
 /**
  * @internal
@@ -56,7 +58,9 @@ interface BaseProps {
    */
   statusItems?: PanelStatusItem[];
   /**
-   * Handle opening error details view (like inspect / error tab)
+   * Fired when the user clicks the status message/popover, alongside PanelContext's
+   * `onOpenInspector` which actually opens the error details view. Use for host-side side
+   * effects (e.g. telemetry).
    */
   statusMessageOnClick?: (e: React.SyntheticEvent) => void;
   /**
@@ -88,6 +92,16 @@ interface BaseProps {
    * Can contain text, pills, links, buttons, or any other React elements.
    */
   subHeaderContent?: ReactNode;
+  /**
+   * Minimum height (px) for the panel container. Used by content-fit layouts so
+   * the chrome still fills a floor when its content is shorter.
+   */
+  minHeight?: number;
+  /**
+   * Maximum height (px) for the panel container. With no `height`, children receive
+   * the inner height this cap leaves, so content-fit panels can size to it.
+   */
+  maxHeight?: number;
 }
 
 interface FixedDimensions extends BaseProps {
@@ -167,8 +181,17 @@ export function PanelChrome({
   showMenuAlways = false,
   subHeaderContent,
   subtitle,
+  minHeight,
+  maxHeight,
 }: PanelChromeProps) {
+  const { notices, activateNotices } = usePanelContext();
+  useEffect(() => activateNotices?.(), [activateNotices]);
+  const statusSnapshot = usePanelStatusSnapshot(notices);
+  const hasStatus = Boolean(
+    statusSnapshot.items.length || (!statusSnapshot.hostInitialized && (statusMessage || statusItems?.length))
+  );
   const theme = useTheme2();
+  const visualRefreshEnabled = theme.flags.visualDesignRefresh;
   const styles = useStyles2(getStyles);
   const panelContentId = useId();
   const panelTitleId = useId().replace(/:/g, '_');
@@ -210,7 +233,7 @@ export function PanelChrome({
     theme,
     headerHeight,
     collapsed,
-    height,
+    height ?? maxHeight,
     width
   );
 
@@ -219,7 +242,7 @@ export function PanelChrome({
     paddingBottom: subHeaderHeight ? 0 : theme.spacing.gridSize,
   };
 
-  const containerStyles: CSSProperties = { width, height: collapsed ? undefined : height };
+  const containerStyles: CSSProperties = { width, height: collapsed ? undefined : height, minHeight, maxHeight };
   const [ref, { width: loadingBarWidth }] = useMeasure<HTMLDivElement>();
 
   /** Old property name now maps to actions */
@@ -289,9 +312,10 @@ export function PanelChrome({
         <div className={styles.title}>
           <Text
             element="h2"
-            variant="h6"
+            variant={visualRefreshEnabled ? 'base' : 'h6'}
             truncate
             title={typeof title === 'string' ? title : undefined}
+            weight="medium"
             id={panelTitleId}
           >
             {title}
@@ -302,7 +326,7 @@ export function PanelChrome({
       {/* Collapsible title */}
       {collapsible && (
         <div className={styles.title}>
-          <Text element="h2" variant="h6">
+          <Text element="h2" variant={visualRefreshEnabled ? 'base' : 'h6'} weight="medium">
             <button
               type="button"
               className={styles.clearButtonStyles}
@@ -322,7 +346,7 @@ export function PanelChrome({
                   !title ? t('grafana-ui.panel-chrome.aria-label-toggle-collapse', 'toggle collapse panel') : undefined
                 }
               />
-              <Text variant="h6" truncate id={panelTitleId}>
+              <Text variant={visualRefreshEnabled ? 'base' : 'h6'} truncate id={panelTitleId}>
                 {title}
               </Text>
             </button>
@@ -415,7 +439,7 @@ export function PanelChrome({
               </HoverWidget>
             )}
 
-            {(Boolean(statusMessage) || Boolean(statusItems?.length)) && (
+            {hasStatus && (
               <div className={styles.errorContainerFloating}>
                 <PanelStatus
                   message={statusMessage}
@@ -439,7 +463,7 @@ export function PanelChrome({
               onMouseLeave={isSelectable ? onHeaderLeave : undefined}
               onPointerUp={onPointerUp}
             >
-              {(Boolean(statusMessage) || Boolean(statusItems?.length)) && (
+              {hasStatus && (
                 <div className={dragClassCancel}>
                   <PanelStatus
                     message={statusMessage}
@@ -572,12 +596,24 @@ const getStyles = (theme: GrafanaTheme2) => {
         opacity: '0',
         visibility: 'hidden',
       },
+      'div.show-on-hover': {
+        display: 'none',
+      },
+
+      'div.show-on-hover:has([aria-expanded="true"])': {
+        display: 'flex',
+        opacity: '1',
+        visibility: 'visible',
+      },
 
       '&:focus-visible, &:hover': {
         // only show menu icon on hover or focused panel
         '.show-on-hover': {
           opacity: '1',
           visibility: 'visible',
+        },
+        'div.show-on-hover': {
+          display: 'flex',
         },
       },
 
@@ -588,6 +624,9 @@ const getStyles = (theme: GrafanaTheme2) => {
         '.show-on-hover': {
           visibility: 'visible',
           opacity: '1',
+        },
+        'div.show-on-hover': {
+          display: 'flex',
         },
       },
     }),
@@ -603,8 +642,20 @@ const getStyles = (theme: GrafanaTheme2) => {
     loadingBarContainer: css({
       label: 'panel-loading-bar-container',
       position: 'absolute',
-      top: 0,
-      width: '100%',
+      // inset by the panel border width, so the bar sits on the panel's padding box
+      // rather than on top of the border itself
+      top: 1,
+      left: 1,
+      right: 1,
+      // the clip box has to be at least as tall as the corner radius. On a 1px-tall box the
+      // corner-overlap rule scales the radii down to 1px and nothing is rounded
+      // see https://drafts.csswg.org/css-backgrounds/#corner-overlap
+      height: theme.shape.radius.lg,
+      overflow: 'hidden',
+      borderTopLeftRadius: getInternalRadius(theme, 0, { parentBorderRadius: 'lg' }),
+      borderTopRightRadius: getInternalRadius(theme, 0, { parentBorderRadius: 'lg' }),
+      // the container is taller than the bar it clips, so let hover and clicks through to the header
+      pointerEvents: 'none',
       // this is to force the loading bar container to create a new stacking context
       // otherwise, in webkit browsers on windows/linux, the aliasing of panel text changes when the loading bar is shown
       // see https://github.com/grafana/grafana/issues/88104

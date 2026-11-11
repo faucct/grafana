@@ -11,6 +11,7 @@ import {
   type EventBus,
   EventBusSrv,
   type GrafanaTheme2,
+  type LoadingState,
   type LogLevel,
   type LogRowModel,
   LogsDedupStrategy,
@@ -58,7 +59,7 @@ export interface Props {
   infiniteScrollMode?: InfiniteScrollMode;
   initialScrollPosition?: 'top' | 'bottom';
   isLabelFilterActive?: (key: string, value: string, refId?: string) => Promise<boolean>;
-  loading?: boolean;
+  loadingState?: LoadingState;
   loadMore?: LoadMoreLogsType;
   logLineMenuCustomItems?: LogLineMenuCustomItem[];
   logOptionsStorageKey?: string;
@@ -141,7 +142,7 @@ export const LogList = ({
   infiniteScrollMode,
   initialScrollPosition = 'top',
   isLabelFilterActive,
-  loading,
+  loadingState,
   loadMore,
   logLineMenuCustomItems,
   logs,
@@ -243,7 +244,7 @@ export const LogList = ({
             grammar={grammar}
             initialScrollPosition={initialScrollPosition}
             infiniteScrollMode={infiniteScrollMode}
-            loading={loading}
+            loadingState={loadingState}
             loadMore={loadMore}
             logs={logs}
             showControls={showControls}
@@ -265,7 +266,7 @@ const LogListComponent = ({
   grammar,
   initialScrollPosition = 'top',
   infiniteScrollMode = 'interval',
-  loading,
+  loadingState,
   loadMore,
   logs,
   showControls,
@@ -281,6 +282,7 @@ const LogListComponent = ({
     fontSize,
     forceEscape,
     hasLogsWithErrors,
+    hasLogsWithErrorAttributes,
     hasSampledLogs,
     onClickFilterString,
     onClickFilterOutString,
@@ -326,7 +328,7 @@ const LogListComponent = ({
       wrapLogMessage,
     ]
   );
-  const styles = useStyles2(getStyles, dimensions, displayedFields, { unwrappedColumns });
+  const styles = useStyles2(getStyles, dimensions, displayedFields, { unwrappedColumns }, listHeight);
   const otelLogsFormattingEnabled = useBooleanFlagValue('otelLogsFormatting', false);
   const widthContainer = wrapperRef.current ?? containerElement;
   const {
@@ -394,7 +396,6 @@ const LogListComponent = ({
         grammar
       )
     );
-    virtualization.resetLogLineSizes();
     listRef.current?.resetAfterIndex(0);
   }, [
     forceEscape,
@@ -408,6 +409,30 @@ const LogListComponent = ({
     virtualization,
     wrapLogMessage,
   ]);
+
+  // Only wipe the cached row heights when something that can change how an already-rendered line looks changes.
+  useEffect(() => {
+    virtualization.resetLogLineSizes();
+    listRef.current?.resetAfterIndex(0);
+  }, [forceEscape, otelLogsFormattingEnabled, prettifyJSON, sortOrder, timeZone, virtualization, wrapLogMessage]);
+
+  // Cached height is only safe to carry over to a new `logs` array when it is the same underlying result set.
+  const prevDataFramesRef = useRef(dataFrames);
+  useEffect(() => {
+    const prevConfigs = prevDataFramesRef.current?.flatMap((frame) => frame.fields.map((field) => field.config));
+    const isSameResultSet =
+      !!prevConfigs?.length &&
+      !!dataFrames?.length &&
+      dataFrames.some(
+        (frame) =>
+          prevDataFramesRef.current!.includes(frame) || frame.fields.some((field) => prevConfigs.includes(field.config))
+      );
+    prevDataFramesRef.current = dataFrames;
+    if (!isSameResultSet) {
+      virtualization.resetLogLineSizes();
+    }
+    listRef.current?.resetAfterIndex(0);
+  }, [dataFrames, logs, virtualization]);
 
   useEffect(() => {
     listRef.current?.resetAfterIndex(0);
@@ -465,14 +490,16 @@ const LogListComponent = ({
         // Event handled by the parent.
         return;
       }
-      toggleDetails(log);
+      const modifierKeyPressed = e.ctrlKey || e.metaKey || e.shiftKey;
+
+      toggleDetails(log, modifierKeyPressed);
     },
     [handleTextSelection, toggleDetails]
   );
 
   const focusLogLine = useCallback(
     (log: LogListModel, align: Align = 'start') => {
-      const index = filteredLogs.findIndex((filteredLog) => filteredLog.uid === log.uid);
+      const index = filteredLogs.findIndex((filteredLog) => filteredLog.uniqueKey === log.uniqueKey);
       if (index >= 0) {
         debouncedScrollToItem(index, align);
       }
@@ -548,7 +575,7 @@ const LogListComponent = ({
           displayedFields={displayedFields}
           handleOverflow={handleOverflow}
           infiniteScrollMode={infiniteScrollMode}
-          loading={loading}
+          loadingState={loadingState}
           logs={filteredLogs}
           loadMore={loadMore}
           onClick={handleLogLineClick}
@@ -561,13 +588,15 @@ const LogListComponent = ({
           virtualization={virtualization}
           wrapLogMessage={wrapLogMessage}
         >
-          {({ getItemKey, itemCount, onItemsRendered, Renderer }) => (
+          {({ getItemKey, itemCount, itemData, onItemsRendered, Log }) => (
             <VariableSizeList
               className={styles.logList}
               height={listHeight}
               itemCount={itemCount}
+              itemData={itemData}
               itemSize={getLogLineSize.bind(null, virtualization, filteredLogs, widthContainer, displayedFields, {
                 hasLogsWithErrors,
+                hasLogsWithErrorAttributes,
                 hasSampledLogs,
                 showDuplicates: dedupStrategy !== LogsDedupStrategy.none,
                 showTime,
@@ -582,7 +611,7 @@ const LogListComponent = ({
               style={wrapLogMessage ? { overflowY: 'scroll' } : { overflow: 'scroll' }}
               width="100%"
             >
-              {Renderer}
+              {Log}
             </VariableSizeList>
           )}
         </InfiniteScroll>
@@ -598,7 +627,8 @@ function getStyles(
   theme: GrafanaTheme2,
   dimensions: LogFieldDimension[],
   displayedFields: string[] = [],
-  { unwrappedColumns }: { unwrappedColumns: boolean }
+  { unwrappedColumns }: { unwrappedColumns: boolean },
+  listHeight: number
 ) {
   return {
     logList: css({
@@ -613,6 +643,8 @@ function getStyles(
     logListContainer: css({
       display: 'flex',
       flexDirection: 'row-reverse',
+      // A definite height is required, otherwise the tallest child sets it and the controls never overflow.
+      height: listHeight,
       // Minimum width to prevent rendering issues and a sausage-like logs panel.
       minWidth: theme.spacing(35),
     }),

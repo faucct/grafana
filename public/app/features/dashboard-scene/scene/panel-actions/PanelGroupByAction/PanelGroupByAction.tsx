@@ -3,7 +3,7 @@ import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { fuzzySearch, type MetricFindValue } from '@grafana/data';
 import { selectors } from '@grafana/e2e-selectors';
 import { Trans } from '@grafana/i18n';
-import { getDataSourceSrv } from '@grafana/runtime';
+import { getDataSourceInstance } from '@grafana/runtime';
 import {
   type AdHocFiltersVariable,
   GroupByVariable,
@@ -42,7 +42,7 @@ export function PanelGroupByAction({ groupByVariable, adhocGroupByVariable, quer
       let fetchedOptions: VariableValueOption[];
 
       if (groupByVariable) {
-        const ds = await getDataSourceSrv().get(groupByVariable.state.datasource);
+        const ds = await getDataSourceInstance(groupByVariable.state.datasource);
         const keys = await groupByVariable._getKeys(ds, queries);
         fetchedOptions = metricFindValuesToOptions(Array.isArray(keys) ? keys : (keys.data ?? []));
       } else if (adhocGroupByVariable) {
@@ -104,6 +104,7 @@ export function PanelGroupByAction({ groupByVariable, adhocGroupByVariable, quer
       fill="text"
       data-testid={selectors.components.Panels.Panel.PanelGroupByHeaderAction}
       ref={ref}
+      aria-expanded={isPopoverVisible}
       onClick={(ev) => {
         openPopover();
         ev.stopPropagation();

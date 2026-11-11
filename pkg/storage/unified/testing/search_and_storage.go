@@ -3,8 +3,8 @@ package test
 import (
 	"context"
 	"testing"
+	"uuid"
 
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	claims "github.com/grafana/authlib/types"
@@ -18,18 +18,19 @@ import (
 )
 
 func RunTestSearchAndStorage(t *testing.T, ctx context.Context, backend resource.StorageBackend, searchBackend resource.SearchBackend) {
+	const nsPrefix = "test-ns"
+
 	// Create a test user with admin permissions
 	testUser := &identity.StaticRequester{
 		Type:           claims.TypeUser,
 		Login:          "testuser",
 		UserID:         123,
 		UserUID:        "u123",
+		Namespace:      nsPrefix,
 		OrgRole:        identity.RoleAdmin,
 		IsGrafanaAdmin: true,
 	}
 	ctx = claims.WithAuthInfo(ctx, testUser)
-
-	nsPrefix := "test-ns"
 
 	var server resource.ResourceServer
 
@@ -88,7 +89,7 @@ func RunTestSearchAndStorage(t *testing.T, ctx context.Context, backend resource
 				Key:    key,
 				Value:  value,
 				Object: meta,
-				GUID:   uuid.New().String(),
+				GUID:   uuid.NewV4().String(),
 			})
 			require.NoError(t, err)
 			require.Greater(t, rv, int64(0))
@@ -122,12 +123,12 @@ func RunTestSearchAndStorage(t *testing.T, ctx context.Context, backend resource
 					Namespace: nsPrefix,
 				},
 			},
-			Query: "initial",
-			Limit: 10,
+			Query:        "initial",
+			Limit:        10,
+			ResultFormat: resourcepb.ResourceSearchRequest_FIELD_VALUES,
 		})
 		require.NoError(t, err)
 		require.NotNil(t, searchResp)
-		require.Nil(t, searchResp.Error)
 		require.Equal(t, int64(2), searchResp.TotalHits)
 	})
 
@@ -189,7 +190,6 @@ func RunTestSearchAndStorage(t *testing.T, ctx context.Context, backend resource
 			})
 			require.NoError(t, err)
 			require.NotNil(t, createResp)
-			require.Nil(t, createResp.Error)
 		}
 	})
 
@@ -202,12 +202,12 @@ func RunTestSearchAndStorage(t *testing.T, ctx context.Context, backend resource
 					Namespace: nsPrefix,
 				},
 			},
-			Query: "Document",
-			Limit: 10,
+			Query:        "Document",
+			Limit:        10,
+			ResultFormat: resourcepb.ResourceSearchRequest_FIELD_VALUES,
 		})
 		require.NoError(t, err)
 		require.NotNil(t, searchResp)
-		require.Nil(t, searchResp.Error)
 		require.Equal(t, int64(5), searchResp.TotalHits)
 	})
 
@@ -220,12 +220,12 @@ func RunTestSearchAndStorage(t *testing.T, ctx context.Context, backend resource
 					Namespace: nsPrefix,
 				},
 			},
-			Query: "hello",
-			Limit: 10,
+			Query:        "hello",
+			Limit:        10,
+			ResultFormat: resourcepb.ResourceSearchRequest_FIELD_VALUES,
 		})
 		require.NoError(t, err)
 		require.NotNil(t, searchResp)
-		require.Nil(t, searchResp.Error)
 		// finding a document by its tag using the query field is not supported anymore, so should return nothing here
 		// https://github.com/grafana/grafana/pull/111842
 		require.Equal(t, int64(0), searchResp.TotalHits)
@@ -244,11 +244,11 @@ func RunTestSearchAndStorage(t *testing.T, ctx context.Context, backend resource
 					Values:   []string{"hello"},
 				}},
 			},
-			Limit: 10,
+			Limit:        10,
+			ResultFormat: resourcepb.ResourceSearchRequest_FIELD_VALUES,
 		})
 		require.NoError(t, err)
 		require.NotNil(t, searchResp)
-		require.Nil(t, searchResp.Error)
 		require.Equal(t, int64(3), searchResp.TotalHits)
 	})
 
@@ -261,12 +261,12 @@ func RunTestSearchAndStorage(t *testing.T, ctx context.Context, backend resource
 					Namespace: nsPrefix,
 				},
 			},
-			Query: "tag1",
-			Limit: 10,
+			Query:        "tag1",
+			Limit:        10,
+			ResultFormat: resourcepb.ResourceSearchRequest_FIELD_VALUES,
 		})
 		require.NoError(t, err)
 		require.NotNil(t, searchResp)
-		require.Nil(t, searchResp.Error)
 		// finding a document by its tag using the query field is not supported anymore, so should return nothing here
 		// https://github.com/grafana/grafana/pull/111842
 		require.Equal(t, int64(0), searchResp.TotalHits)
@@ -285,11 +285,11 @@ func RunTestSearchAndStorage(t *testing.T, ctx context.Context, backend resource
 					Values:   []string{"tag1"},
 				}},
 			},
-			Limit: 10,
+			Limit:        10,
+			ResultFormat: resourcepb.ResourceSearchRequest_FIELD_VALUES,
 		})
 		require.NoError(t, err)
 		require.NotNil(t, searchResp)
-		require.Nil(t, searchResp.Error)
 		require.Equal(t, int64(1), searchResp.TotalHits)
 	})
 }

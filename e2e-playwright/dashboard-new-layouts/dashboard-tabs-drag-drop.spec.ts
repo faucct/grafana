@@ -1,19 +1,16 @@
-import { test, expect } from '@grafana/plugin-e2e';
-
+import v2DashboardNestedTabs from '../dashboards/V2DashNestedTabs.json';
 import v2DashboardWithTabs from '../dashboards/V2DashRowsWithTabs.json';
 
-import { Controls, Tabs } from './page-objects';
-import { dragTo, importTestDashboard } from './utils';
+import { expect, test } from './fixtures';
+import { dragTo, flows, getTabBox } from './helpers';
+import { type Tabs } from './page-objects';
 
 test.use({
-  featureToggles: {
-    dashboardNewLayouts: true,
-  },
   viewport: { width: 1920, height: 1080 },
 });
 
 async function getTabWithBoundingBox(tabs: Tabs, tabTitle: string) {
-  const tab = tabs.getTab(tabTitle);
+  const tab = tabs.getTitle(tabTitle);
   const box = await tab.boundingBox();
   if (!box) {
     throw new Error(`Tab bounding box not found for title: ${tabTitle}`);
@@ -27,19 +24,21 @@ async function getTabWithBoundingBox(tabs: Tabs, tabTitle: string) {
 
 test.describe('Dashboard Tabs Drag and Drop', { tag: ['@dashboards'] }, () => {
   test('drag a tab within the same manager and then to a different row', async ({
-    dashboardPage,
     selectors,
     page,
-    components,
+    controls,
+    tabs,
   }) => {
-    await importTestDashboard(page, selectors, 'Drag tab within manager', JSON.stringify(v2DashboardWithTabs), {
-      checkPanelsVisible: false,
-      requiresDataSourceSelection: false,
-    });
-
-    const controls = new Controls({ page, dashboardPage, selectors, components });
-    const tabs = new Tabs({ page, dashboardPage, selectors, components });
-
+    await flows.dashboards.importTestDashboard(
+      page,
+      selectors,
+      'Drag tab within manager',
+      JSON.stringify(v2DashboardWithTabs),
+      {
+        checkPanelsVisible: false,
+        requiresDataSourceSelection: false,
+      }
+    );
     await controls.enterEditMode();
 
     // drag a tab within the same tabs manager ---
@@ -81,5 +80,38 @@ test.describe('Dashboard Tabs Drag and Drop', { tag: ['@dashboards'] }, () => {
     // assert "bottom a" | "top a" | "bottom b" after drag
     expect(bottomA.box.x).toBeLessThan(dragged.box.x);
     expect(dragged.box.x).toBeLessThan(bottomB.box.x);
+  });
+
+  test('does not drop a tab into the tab bar nested inside it', async ({ selectors, page, controls, panels, tabs }) => {
+    await flows.dashboards.importTestDashboard(
+      page,
+      selectors,
+      'Drop tab into its nested tabs',
+      JSON.stringify(v2DashboardNestedTabs),
+      {
+        checkPanelsVisible: false,
+        requiresDataSourceSelection: false,
+      }
+    );
+    await controls.enterEditMode();
+
+    const inner2 = await getTabBox(tabs, 'inner 2');
+    await dragTo(page, 'tab "outer 1"', tabs.getTitle('outer 1'), inner2.x + 5, inner2.y + inner2.height / 2, {
+      steps: 20,
+    });
+
+    await tabs.select('inner 2');
+    await expect(panels.getPanel('Inner two')).toBeVisible();
+    await tabs.select('outer 2');
+    await expect(panels.getPanel('Outer two')).toBeVisible();
+    await tabs.select('outer 1');
+    await expect(panels.getPanel('Inner two')).toBeVisible();
+
+    const [outer1, outer2, inner1, inner2After] = await Promise.all(
+      ['outer 1', 'outer 2', 'inner 1', 'inner 2'].map((title) => getTabBox(tabs, title))
+    );
+    expect(outer1.x).toBeLessThan(outer2.x);
+    expect(inner1.x).toBeLessThan(inner2After.x);
+    expect(inner1.y).toBeGreaterThan(outer1.y);
   });
 });

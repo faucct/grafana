@@ -1,7 +1,9 @@
 import { reportInteraction } from '@grafana/runtime';
 import { Card, Icon, Link, Stack, Text, useStyles2 } from '@grafana/ui';
+import { DescriptionTooltip } from 'app/features/search/components/DescriptionTooltip';
 import { type LocationInfo } from 'app/features/search/service/types';
 import { StarToolbarButton } from 'app/features/stars/StarToolbarButton';
+import { findStarredKindBySearchKind } from 'app/features/stars/kinds';
 
 import { type Dashboard } from './DashList';
 import { ListRow } from './ListRow';
@@ -16,8 +18,6 @@ interface Props {
   source: string; // for rudderstack analytics to track which page DashListItem click from
   order?: number; // for rudderstack analytics to track position in cards
   onStarChange?: (id: string, isStarred: boolean) => void;
-  // Row density for list mode. 'compact' gives denser rows for the redesigned homepage
-  density?: 'default' | 'compact';
 }
 export function DashListItem({
   dashboard,
@@ -28,10 +28,20 @@ export function DashListItem({
   order,
   onStarChange,
   source,
-  density = 'default',
 }: Props) {
   const css = useStyles2(getStyles);
-  const isCompact = density === 'compact';
+
+  // Rows can be folders too; the star targets the row's own kind, and a kind nobody can star gets none
+  const starredKind = findStarredKindBySearchKind(dashboard.kind);
+  const starButton = starredKind ? (
+    <StarToolbarButton
+      title={dashboard.name}
+      group={starredKind.group}
+      kind={starredKind.kind}
+      id={dashboard.uid}
+      onStarChange={onStarChange}
+    />
+  ) : null;
 
   const onCardLinkClick = () => {
     reportInteraction('grafana_browse_dashboards_page_click_list_item', {
@@ -46,23 +56,23 @@ export function DashListItem({
     <>
       {layoutMode === 'list' ? (
         <ListRow
-          isCompact={isCompact}
           title={dashboard.name}
           subtitle={showFolderNames && locationInfo ? locationInfo.name : undefined}
           href={url}
           onClick={onCardLinkClick}
           trailing={
-            <StarToolbarButton
-              title={dashboard.name}
-              group="dashboard.grafana.app"
-              kind="Dashboard"
-              id={dashboard.uid}
-              onStarChange={onStarChange}
-            />
+            dashboard.description ? (
+              <Stack gap={0.5} alignItems="center">
+                <DescriptionTooltip description={dashboard.description} />
+                {starButton}
+              </Stack>
+            ) : (
+              starButton
+            )
           }
         />
       ) : (
-        <Card noMargin className={css.dashlistCardContainer}>
+        <Card noMargin isCompact className={css.dashlistCardContainer}>
           <Stack justifyContent="space-between" alignItems="start" height="100%">
             <Link
               className={css.dashlistCard}
@@ -91,13 +101,7 @@ export function DashListItem({
               )}
             </Link>
 
-            <StarToolbarButton
-              title={dashboard.name}
-              group="dashboard.grafana.app"
-              kind="Dashboard"
-              id={dashboard.uid}
-              onStarChange={onStarChange}
-            />
+            {starButton}
           </Stack>
         </Card>
       )}

@@ -16,14 +16,14 @@ export { customCreateTeamHandler } from './handlers/api/teams/handlers';
 export {
   customGetUserPreferencesHandler,
   customPatchUserPreferencesHandler,
-} from './handlers/apis/preferences.grafana.app/v1alpha1/handlers';
+} from './handlers/apis/preferences.grafana.app/v1/handlers';
 export { mockUserPreferences, setupMockUserPreferences, setMockUserPreferences } from './fixtures/preferences';
 export { setMockStarredDashboards, setMockStarredFolders } from './fixtures/starred';
+export { mockPluginMeta, setMockPluginMetas, type MockPluginMeta } from './fixtures/pluginMetas';
 export { customSetTeamRolesHandler } from './handlers/api/access-control/handlers';
-export { customCreateFolderHandler, customFolderCountsHandler } from './handlers/api/folders/handlers';
-export { customCreateFolderHandler as customCreateFolderHandlerAppPlatform } from './handlers/apis/folder.grafana.app/v1beta1/handlers';
+export { customCreateFolderHandler } from './handlers/apis/folder.grafana.app/v1beta1/handlers';
 
 export * as folderHandlers from './handlers/apis/folder.grafana.app/v1beta1/handlers';
 
-export { setTestFlags, getTestFeatureFlagClient } from './utilities/featureFlags';
+export { setTestFlags, testWithFlags, getTestFeatureFlagClient } from './utilities/featureFlags';
 export { mockLogger } from './utilities/mockLogger';
